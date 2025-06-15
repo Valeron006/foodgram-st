@@ -8,7 +8,8 @@ from rest_framework.exceptions import PermissionDenied
 from menu.models import Ingredient
 from rest_framework import serializers
 
-from my_user.models import SubscriptionRelation
+from my_user.serializers import UserSerializer
+from myproject.settings import MIN_TIME, MAX_TIME
 from .models import Recipe, RecipeIngredient, FavoriteRelation, ShoppingCartRelation
 from django.db import transaction
 
@@ -29,19 +30,6 @@ class IngredientRecipeSerializer(serializers.ModelSerializer):
     class Meta:
         model = RecipeIngredient
         fields = ('id', 'name', 'measurement_unit', 'amount')
-
-
-class UserSerializer(serializers.ModelSerializer):
-    is_subscribed = serializers.SerializerMethodField(read_only=True)
-
-    class Meta:
-        model = User
-        fields = ('id', 'email', 'username', 'first_name', 'last_name', 'is_subscribed', 'avatar')
-
-    def get_is_subscribed(self, obj):
-        if self.context['request'].user.is_authenticated:
-            return SubscriptionRelation.objects.filter(sender=self.context['request'].user, to=obj).exists()
-        return False
 
 
 class RecipeListSerializer(serializers.ModelSerializer):
@@ -71,7 +59,8 @@ class RecipeListSerializer(serializers.ModelSerializer):
 
 class RecipeIngredientWriteSerializer(serializers.Serializer):
     id = serializers.PrimaryKeyRelatedField(queryset=Ingredient.objects.all())
-    amount = serializers.IntegerField()
+    amount = serializers.IntegerField(min_value=MIN_TIME,
+                                      max_value=MAX_TIME, )
 
 
 class BaseImageSerializerField(serializers.Field):
@@ -87,7 +76,8 @@ class BaseImageSerializerField(serializers.Field):
 class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
     ingredients = RecipeIngredientWriteSerializer(many=True)
     image = BaseImageSerializerField()
-    cooking_time = serializers.IntegerField()
+    cooking_time = serializers.IntegerField(min_value=MIN_TIME,
+                                            max_value=MAX_TIME, )
 
     class Meta:
         model = Recipe
@@ -113,7 +103,7 @@ class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
         if 'ingredients' not in validated_data:
             raise serializers.ValidationError()
         ingredients = validated_data.pop('ingredients')
-        RecipeIngredient.objects.filter(recipe=instance).delete()
+        instance.recipe_ingredients.all().delete()
         self._add_ingredients(instance, ingredients)
         return super().update(instance, validated_data)
 
@@ -124,21 +114,23 @@ class RecipeCreateUpdateSerializer(serializers.ModelSerializer):
     def validate_ingredients(self, value):
         if not value:
             raise serializers.ValidationError
-        ingredients_list = []
+        ingredients_list = set()
         for ingredient in value:
             if not ingredient.get('id') or (ingredient['id'] in ingredients_list):
                 raise serializers.ValidationError
-            else:
-                ingredients_list.append(ingredient['id'])
+            ingredients_list.add(ingredient['id'])
         return value
 
     def _add_ingredients(self, recipe, ingredients):
-        for ingredient in ingredients:
-            RecipeIngredient.objects.create(
+        recipe_ingredients = [
+            RecipeIngredient(
                 recipe=recipe,
                 ingredient=ingredient['id'],
                 amount=ingredient['amount']
             )
+            for ingredient in ingredients
+        ]
+        RecipeIngredient.objects.bulk_create(recipe_ingredients)
 
 
 class RecipeShortSerializer(serializers.ModelSerializer):
@@ -169,7 +161,7 @@ class FavoriteSerializer(serializers.ModelSerializer):
 
 class SubscribedSerializer(serializers.ModelSerializer):
     is_subscribed = serializers.SerializerMethodField()
-    recipes = RecipeShortSerializer(many=True, read_only=True)
+    recipes = serializers.SerializerMethodField()
     recipes_count = serializers.IntegerField(source='recipes.count', read_only=True)
 
     class Meta:
@@ -181,5 +173,13 @@ class SubscribedSerializer(serializers.ModelSerializer):
 
     def get_is_subscribed(self, obj):
         if self.context['request'].user.is_authenticated:
-            return SubscriptionRelation.objects.filter(sender=self.context['request'].user, to=obj).exists()
+            return self.context['request'].user.sub_sender.filter(to=obj).exists()
         return False
+
+    def get_recipes(self, obj):
+        recipes = obj.recipes.all()
+        recipes_limit = self.context.get('request').query_params.get('recipes_limit') if self.context.get('request') else None
+        if recipes_limit and recipes_limit.isdigit():
+            recipes = recipes[:int(recipes_limit)]
+        serializer = RecipeShortSerializer(recipes, many=True, read_only=True, context=self.context)
+        return serializer.data

@@ -1,3 +1,5 @@
+from http import HTTPStatus
+
 from django.urls import reverse
 from rest_framework import generics
 from rest_framework.pagination import PageNumberPagination
@@ -62,9 +64,9 @@ class RecipeViewSet(viewsets.ModelViewSet):
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance.author != request.user:
-            return Response(status=403)
+            return Response(status=HTTPStatus.FORBIDDEN)
         self.perform_destroy(instance)
-        return Response(status=204)
+        return Response(status=HTTPStatus.NO_CONTENT)
 
     @action(detail=True, methods=['get'], url_path='get-link')
     def get_link(self, _, pk=None):
@@ -74,36 +76,62 @@ class RecipeViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post', 'delete'], url_path='favorite')
     def favorite(self, request, pk=None):
-        recipe = Recipe.objects.get(pk=pk)
-
+        try:
+            recipe = Recipe.objects.get(pk=pk)
+        except:
+            return Response(status=HTTPStatus.NOT_FOUND)
         if request.method == 'POST':
             obj, created = FavoriteRelation.objects.get_or_create(user=request.user, recipe=recipe)
             if not created:
-                return Response(status=400)
+                return Response(status=HTTPStatus.BAD_REQUEST)
             serializer = RecipeShortSerializer(recipe, context={'request': request})
-            return Response(serializer.data, status=201)
+            return Response(serializer.data, status=HTTPStatus.CREATED)
         if request.method == 'DELETE':
             favorite = request.user.favorites.filter(recipe=recipe).first()
             if not favorite:
-                return Response(status=400)
+                return Response(status=HTTPStatus.BAD_REQUEST)
             favorite.delete()
-            return Response(status=200)
+            return Response(status=HTTPStatus.NO_CONTENT)
 
     @action(detail=True, methods=['post', 'delete'], url_path='shopping_cart')
     def shopping_cart(self, request, pk=None):
-        recipe = Recipe.objects.get(pk=pk)
-
+        try:
+            recipe = Recipe.objects.get(pk=pk)
+        except:
+            return Response(status=HTTPStatus.NOT_FOUND)
         if request.method == 'POST':
             obj, created = ShoppingCartRelation.objects.get_or_create(user=request.user, recipe=recipe)
             if not created:
-                return Response(status=400)
+                return Response(status=HTTPStatus.BAD_REQUEST)
             serializer = RecipeShortSerializer(recipe, context={'request': request})
-            return Response(serializer.data, status=201)
+            return Response(serializer.data, status=HTTPStatus.CREATED)
         if request.method == 'DELETE':
             deleted_count, _ = request.user.shopping_cart.filter(recipe=recipe).delete()
             if deleted_count == 0:
-                return Response(status=400)
-            return Response(status=200)
+                return Response(status=HTTPStatus.BAD_REQUEST)
+            return Response(status=HTTPStatus.NO_CONTENT)
+
+    @action(detail=False, methods=['get'], url_path='download_shopping_cart')
+    def download_shopping_cart(self, request):
+        ingredients = request.user.shopping_cart.all().values_list(
+            'recipe__recipe_ingredients__ingredient__name',
+            'recipe__recipe_ingredients__ingredient__measurement_unit',
+            'recipe__recipe_ingredients__amount'
+        )
+
+        shopping_list = {}
+        for name, unit, amount in ingredients:
+            if name not in shopping_list:
+                shopping_list[name] = {'amount': 0, 'unit': unit}
+            shopping_list[name]['amount'] += amount
+
+        text_content = "Список покупок:\n\n"
+        for name, data in shopping_list.items():
+            text_content += f"{name} - {data['amount']} {data['unit']}\n"
+
+        response = Response(text_content, content_type='text/plain', status=HTTPStatus.OK)
+        response['Content-Disposition'] = 'attachment; filename="shopping_list.txt"'
+        return response
 
 
 def view_short_link(request, pk):

@@ -3,8 +3,6 @@ from django.contrib.auth import get_user_model
 from djoser.serializers import UserCreateSerializer
 from rest_framework.validators import UniqueValidator
 
-from my_user.models import SubscriptionRelation
-
 User = get_user_model()
 
 
@@ -25,7 +23,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     def get_is_subscribed(self, obj):
         if self.context['request'].user.is_authenticated:
-            return SubscriptionRelation.objects.filter(sender=self.context['request'].user, to=obj).exists()
+            return self.context['request'].user.sub_sender.filter(to=obj).exists()
         return False
 
 
@@ -33,4 +31,3 @@ class AvatarSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ('avatar',)
-

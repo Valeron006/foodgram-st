@@ -142,3 +142,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = "my_user.CustomUser"
+
+MIN_TIME = 1
+
+MAX_TIME = 32000
